@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { initializeApp, getApps } from "firebase/app";
 import { getAuth, signInWithEmailAndPassword } from "firebase/auth";
-import { getFirestore, collection, doc, onSnapshot, updateDoc, setDoc, serverTimestamp } from "firebase/firestore";
+import { getFirestore, collection, doc, onSnapshot, updateDoc, setDoc, serverTimestamp, getDoc } from "firebase/firestore";
 
 /* =====================================================
    ENTERPRISE AIRPORT SOC — CONTROL ROOM PRO (STABLE)
@@ -110,6 +110,7 @@ export default function CCTVDashboardStarter() {
   const [tick, setTick] = useState(0);
 
   const resolveRoleFromEmail = (email) => {
+    // Fallback only (used if users doc not found)
     const e = String(email || "").toLowerCase();
     if (e.includes("admin")) return "admin";
     if (e.includes("supervisor") || e.includes("sup")) return "supervisor";
@@ -271,7 +272,25 @@ export default function CCTVDashboardStarter() {
                 try {
                   await signInWithEmailAndPassword(auth, login.username.trim(), login.password);
                   setUserName(login.username.trim());
-                  setRole(resolveRoleFromEmail(login.username.trim()));
+
+                  // Enterprise role security: read role from Firestore users/{email}
+                  let resolvedRole = "operator";
+                  try {
+                    if (db) {
+                      const snap = await getDoc(doc(db, "users", login.username.trim()));
+                      if (snap.exists()) {
+                        resolvedRole = snap.data()?.role || "operator";
+                      } else {
+                        resolvedRole = resolveRoleFromEmail(login.username.trim());
+                      }
+                    } else {
+                      resolvedRole = resolveRoleFromEmail(login.username.trim());
+                    }
+                  } catch {
+                    resolvedRole = resolveRoleFromEmail(login.username.trim());
+                  }
+
+                  setRole(resolvedRole);
                   setIsAuthed(true);
                 } catch {
                   setAuthError("Invalid login credentials");
