@@ -102,6 +102,7 @@ export default function CCTVDashboardStarter() {
   const [authError, setAuthError] = useState("");
 
   const [cameras, setCameras] = useState(seedCameras);
+  const [loadedFromFirebase, setLoadedFromFirebase] = useState(false);
   const [selected, setSelected] = useState(new Set());
   const [bulkStatus, setBulkStatus] = useState("working");
   const [q, setQ] = useState("");
@@ -127,7 +128,14 @@ export default function CCTVDashboardStarter() {
     const unsub = onSnapshot(collection(db, "cameras"), (snap) => {
       const rows = [];
       snap.forEach((d) => rows.push({ id: d.id, ...d.data() }));
-      if (rows.length) setCameras(rows);
+
+      // Production Camera Mode
+      if (rows.length > 0) {
+        setCameras(rows);
+        setLoadedFromFirebase(true);
+      } else {
+        setLoadedFromFirebase(false);
+      }
     });
     return () => unsub();
   }, []);
