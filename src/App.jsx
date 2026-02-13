@@ -102,6 +102,7 @@ export default function CCTVDashboardStarter() {
   const [userName, setUserName] = useState("");
   const [role, setRole] = useState("operator");
   const [login, setLogin] = useState({ username: "", password: "", role: "operator" });
+  const [authError, setAuthError] = useState("");
 
   const [cameras, setCameras] = useState(seedCameras);
   const [selected, setSelected] = useState(new Set());
@@ -110,6 +111,14 @@ export default function CCTVDashboardStarter() {
   const [client, setClient] = useState("ALL");
   const [status, setStatus] = useState("ALL");
   const [tick, setTick] = useState(0);
+
+  // ===== Role Security (Firebase-driven) =====
+  const resolveRoleFromEmail = (email) => {
+    const e = String(email || "").toLowerCase();
+    if (e.includes("admin")) return "admin";
+    if (e.includes("supervisor") || e.includes("sup")) return "supervisor";
+    return "operator";
+  };
 
   // ===== Advanced Shift Intelligence =====
   const [shiftMode, setShiftMode] = useState("AUTO");
@@ -211,10 +220,35 @@ export default function CCTVDashboardStarter() {
           <div className="mt-4 space-y-3">
             <input value={login.username} onChange={(e)=>setLogin({...login, username:e.target.value})} placeholder="Email" className="w-full rounded-xl border border-neutral-700 bg-neutral-800 px-3 py-2 outline-none focus:ring-2 focus:ring-cyan-700/40" />
             <input type="password" value={login.password} onChange={(e)=>setLogin({...login, password:e.target.value})} placeholder="Password" className="w-full rounded-xl border border-neutral-700 bg-neutral-800 px-3 py-2 outline-none focus:ring-2 focus:ring-cyan-700/40" />
-            <select value={login.role} onChange={(e)=>setLogin({...login, role:e.target.value})} className="w-full rounded-xl border border-neutral-700 bg-neutral-800 px-3 py-2">
-              {ROLES.map((r)=><option key={r} value={r}>{r}</option>)}
-            </select>
-            <button onClick={async ()=>{ if(!login.username.trim()) return; if(auth){ try{ await signInWithEmailAndPassword(auth, login.username.trim(), login.password);}catch{}} setUserName(login.username.trim()); setRole(login.role); setIsAuthed(true);} } className="w-full rounded-xl bg-cyan-600 px-3 py-2 font-semibold hover:bg-cyan-500">Login to Control Room</button>
+            <div className="w-full rounded-xl border border-neutral-800 bg-neutral-900 px-3 py-2 text-xs text-neutral-400">
+              Role is assigned automatically after login (Operator / Supervisor / Admin)
+            </div>
+            <button
+              onClick={async () => {
+                setAuthError("");
+                if (!login.username.trim() || !login.password.trim()) {
+                  setAuthError("Enter email and password");
+                  return;
+                }
+                if (!auth) {
+                  setAuthError("Firebase not connected");
+                  return;
+                }
+                try {
+                  await signInWithEmailAndPassword(auth, login.username.trim(), login.password);
+                  const resolvedRole = resolveRoleFromEmail(login.username.trim());
+                  setUserName(login.username.trim());
+                  setRole(resolvedRole);
+                  setIsAuthed(true);
+                } catch (e) {
+                  setAuthError("Invalid login credentials");
+                }
+              }}
+              className="w-full rounded-xl bg-cyan-600 px-3 py-2 font-semibold hover:bg-cyan-500"
+            >
+              Login to Control Room
+            </button>
+            {authError && <div className="text-xs text-red-400">{authError}</div>}
           </div>
         </div>
       </div>
