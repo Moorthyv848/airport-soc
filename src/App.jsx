@@ -45,7 +45,7 @@ const seedCameras = Array.from({ length: 120 }).map((_, i) => {
     client: id % 2 === 0 ? "T1" : "T2",
     location: id % 2 === 0 ? `T1 Zone ${((id % 10) + 1)}` : `T2 Zone ${((id % 10) + 1)}`,
     cameraName: id % 2 === 0 ? `T1 Camera ${id}` : `T2 Camera ${id}`,
-    status: id % 9 === 0 ? "faulty" : id % 13 === 0 ? "maintenance" : id % 17 === 0 ? "offline" : "working",
+    status: "working",
     updatedAt: new Date().toISOString(),
     updatedBy: "system",
     remarks: "",
