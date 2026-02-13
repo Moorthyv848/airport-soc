@@ -21,12 +21,12 @@ const ROLES = ["operator", "supervisor", "admin"];
 const NAV_ITEMS = ["Dashboard", "Live Monitoring", "Supervisor View", "Shift Reports", "System Logs"];
 
 const firebaseConfig = {
-  apiKey: "YOUR_API_KEY",
-  authDomain: "YOUR_AUTH_DOMAIN",
-  projectId: "YOUR_PROJECT_ID",
-  storageBucket: "YOUR_STORAGE_BUCKET",
-  messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
-  appId: "YOUR_APP_ID",
+  apiKey: "AIzaSyBYihneL5770d1gLfwWAJ_sKjfL_hlgUws",
+  authDomain: "landside-control-room.firebaseapp.com",
+  projectId: "landside-control-room",
+  storageBucket: "landside-control-room.firebasestorage.app",
+  messagingSenderId: "85978595792",
+  appId: "1:85978595792:web:5b6c5de9dbd737205bf9d5",
 };
 
 let app = null;
