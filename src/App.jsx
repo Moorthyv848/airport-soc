@@ -455,6 +455,72 @@ export default function CCTVDashboardStarter() {
             </>
           )}
 
+          {activeView === "Supervisor View" && (
+            <SectionCard title="Supervisor View" right={<span className="text-xs text-neutral-400">Live oversight</span>}>
+              <div className="grid md:grid-cols-3 gap-3">
+                <MetricCard title="Total Cameras" value={counts.total} />
+                <MetricCard title="Critical (Faulty+Offline)" value={counts.faulty + counts.offline} tone="red" />
+                <MetricCard title="Selected" value={selected.size} tone="cyan" />
+              </div>
+              <div className="mt-3 text-xs text-neutral-400">Supervisor quick summary by client:</div>
+              <div className="mt-2 grid md:grid-cols-2 gap-3 text-sm">
+                {["T1","T2"].map((cl)=>{
+                  const list = cameras.filter(c=>c.client===cl);
+                  const w = list.filter(c=>c.status==="working").length;
+                  const f = list.filter(c=>c.status==="faulty").length;
+                  const m = list.filter(c=>c.status==="maintenance").length;
+                  const o = list.filter(c=>c.status==="offline").length;
+                  return (
+                    <div key={cl} className="rounded-xl border border-neutral-800 bg-neutral-900 p-3">
+                      <div className="font-semibold text-white">{cl} Terminal</div>
+                      <div className="mt-1 text-xs text-neutral-400">Total: {list.length} | Working: {w} | Faulty: {f} | Maint: {m} | Offline: {o}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </SectionCard>
+          )}
+
+          {activeView === "Shift Reports" && (
+            <SectionCard title="Shift Reports" right={<span className="text-xs text-neutral-400">Auto summary</span>}>
+              <div className="grid md:grid-cols-4 gap-3">
+                <MetricCard title="Total Cameras" value={counts.total} />
+                <MetricCard title="Working" value={counts.working} tone="emerald" />
+                <MetricCard title="Issues" value={counts.faulty + counts.offline} tone="red" />
+                <MetricCard title="Maintenance" value={counts.maintenance} tone="amber" />
+              </div>
+              <div className="mt-3 overflow-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-neutral-800 text-neutral-300">
+                    <tr>
+                      <th className="px-3 py-2 text-left">Client</th>
+                      <th className="px-3 py-2 text-left">Total</th>
+                      <th className="px-3 py-2 text-left">Working</th>
+                      <th className="px-3 py-2 text-left">Faulty</th>
+                      <th className="px-3 py-2 text-left">Maintenance</th>
+                      <th className="px-3 py-2 text-left">Offline</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {["T1","T2"].map((cl)=>{
+                      const list = cameras.filter(c=>c.client===cl);
+                      return (
+                        <tr key={cl} className="border-t border-neutral-800">
+                          <td className="px-3 py-2 font-semibold text-cyan-200">{cl}</td>
+                          <td className="px-3 py-2">{list.length}</td>
+                          <td className="px-3 py-2">{list.filter(c=>c.status==="working").length}</td>
+                          <td className="px-3 py-2">{list.filter(c=>c.status==="faulty").length}</td>
+                          <td className="px-3 py-2">{list.filter(c=>c.status==="maintenance").length}</td>
+                          <td className="px-3 py-2">{list.filter(c=>c.status==="offline").length}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </SectionCard>
+          )}
+
           {activeView === "Live Monitoring" && (
             <SectionCard title="Live Monitoring" right={<span className="text-xs text-neutral-400">Live</span>}>
               <div className="grid md:grid-cols-4 gap-3">
