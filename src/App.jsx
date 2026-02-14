@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { Monitor, Radio, ShieldCheck, FileText } from "lucide-react";
 import { initializeApp, getApps } from "firebase/app";
 import { getAuth, signInWithEmailAndPassword, signOut } from "firebase/auth";
 import {
@@ -28,7 +29,12 @@ const STATUSES = [
   { key: "removed", label: "Removed", pill: "bg-rose-700", row: "bg-rose-950/30" },
 ];
 
-const NAV_ITEMS = ["Dashboard", "RT Inventory", "Supervisor View", "Shift Reports"];
+const NAV_ITEMS = [
+  { key: "CCTV Dashboard", label: "CCTV Dashboard", icon: Monitor },
+  { key: "RT Inventory", label: "RT Inventory", icon: Radio },
+  { key: "Supervisor View", label: "Supervisor View", icon: ShieldCheck },
+  { key: "Shift Reports", label: "Shift Reports", icon: FileText },
+];
 
 const firebaseConfig = {
   apiKey: "AIzaSyBYihneL5770d1gLfwWAJ_sKjfL_hlgUws",
@@ -126,7 +132,7 @@ function AddCameraInline({ onAdd }) {
 }
 
 export default function CCTVDashboardSocProMax() {
-  const [activeView, setActiveView] = useState("Dashboard");
+  const [activeView, setActiveView] = useState("CCTV Dashboard");
   const [isAuthed, setIsAuthed] = useState(false);
   const [userName, setUserName] = useState("");
   const [role, setRole] = useState("operator");
@@ -146,6 +152,8 @@ export default function CCTVDashboardSocProMax() {
   ]);
   const [rtForm, setRtForm] = useState({ location: "T1", rtNumber: "", status: "working" });
   const [editingRtKey, setEditingRtKey] = useState(null);
+  const [editingCameraKey, setEditingCameraKey] = useState(null);
+  const [editingCameraForm, setEditingCameraForm] = useState({ id: "", cameraName: "", location: "", client: "T1", status: "working" });
   const [editingRtForm, setEditingRtForm] = useState({ rtNumber: "", location: "T1", status: "working" });
 
   const RT_LOCATIONS = ["T1", "T2", "Landside", "Control Room"];
@@ -184,17 +192,51 @@ export default function CCTVDashboardSocProMax() {
     return () => unsub();
   }, []);
 
-  const filtered = useMemo(() => cameras.filter((c) => {
-    const qq = q.toLowerCase();
-    return (!q || (c.id || "").toLowerCase().includes(qq) || (c.cameraName || "").toLowerCase().includes(qq) || (c.location || "").toLowerCase().includes(qq)) &&
-      (client === "ALL" || c.client === client) &&
-      (status === "ALL" || c.status === status);
-  }), [cameras, q, client, status]);
+  const filtered = useMemo(() => {
+    const base = cameras.filter((c) => {
+      const qq = q.toLowerCase();
+      return (!q || (c.id || "").toLowerCase().includes(qq) || (c.cameraName || "").toLowerCase().includes(qq) || (c.location || "").toLowerCase().includes(qq)) &&
+        (client === "ALL" || c.client === client) &&
+        (status === "ALL" || c.status === status);
+    });
+
+    const statusPriority = { offline: 0, maintenance: 1, removed: 2, working: 3 };
+    const clientPriority = { T1: 0, T2: 1 };
+
+    const sorted = [...base].sort((a, b) => {
+      const sa = statusPriority[a.status] ?? 9;
+      const sb = statusPriority[b.status] ?? 9;
+      if (sa !== sb) return sa - sb;
+
+      const ca = clientPriority[a.client] ?? 9;
+      const cb = clientPriority[b.client] ?? 9;
+      if (ca !== cb) return ca - cb;
+
+      return String(a.id || "").localeCompare(String(b.id || ""));
+    });
+
+    return sorted;
+  }, [cameras, q, client, status]);
 
   const counts = useMemo(() => {
     const base = { total: cameras.length, working: 0, offline: 0, maintenance: 0, removed: 0 };
     cameras.forEach((c) => { if (base[c.status] !== undefined) base[c.status] += 1; });
     return base;
+  }, [cameras]);
+
+  const rtCounts = useMemo(() => {
+    const base = { total: rtInventory.length, working: 0, offline: 0, maintenance: 0, removed: 0 };
+    rtInventory.forEach((r) => { if (base[r.status] !== undefined) base[r.status] += 1; });
+    return base;
+  }, [rtInventory]);
+
+  const activeCounts = activeView === "RT Inventory" ? rtCounts : counts;
+
+  const cameraAlerts = useMemo(() => {
+    const offline = cameras.filter(c => c.status === "offline").length;
+    const maintenance = cameras.filter(c => c.status === "maintenance").length;
+    const removed = cameras.filter(c => c.status === "removed").length;
+    return { offline, maintenance, removed, total: offline + maintenance + removed };
   }, [cameras]);
 
   const canBulk = role !== "operator";
@@ -221,6 +263,49 @@ export default function CCTVDashboardSocProMax() {
     cameras.filter(c => c.client === k).forEach(c => n.add(getRowKey(c)));
     return n;
   });
+
+  const startEditCamera = (c) => {
+    const key = getRowKey(c);
+    setEditingCameraKey(key);
+    setEditingCameraForm({
+      id: c.id || "",
+      cameraName: c.cameraName || "",
+      location: c.location || "",
+      client: c.client || "T1",
+      status: c.status || "working",
+    });
+  };
+
+  const cancelEditCamera = () => {
+    setEditingCameraKey(null);
+    setEditingCameraForm({ id: "", cameraName: "", location: "", client: "T1", status: "working" });
+  };
+
+  const saveEditCamera = () => {
+    const newId = String(editingCameraForm.id || "").trim();
+    if (!newId) return;
+    setCameras(prev => prev.map(c => {
+      const key = getRowKey(c);
+      if (key !== editingCameraKey) return c;
+      return {
+        ...c,
+        id: newId,
+        cameraName: editingCameraForm.cameraName || newId,
+        location: editingCameraForm.location || "Unknown",
+        client: editingCameraForm.client || c.client,
+        status: editingCameraForm.status || c.status,
+        updatedAt: new Date().toISOString(),
+        updatedBy: userName || "operator",
+      };
+    }));
+    cancelEditCamera();
+  };
+
+  const deleteCamera = (rowKey) => {
+    setSelected(prev => { const n = new Set(prev); n.delete(rowKey); return n; });
+    setCameras(prev => prev.filter(c => getRowKey(c) !== rowKey));
+    if (editingCameraKey === rowKey) cancelEditCamera();
+  };
 
   const updateStatus = async (camera, newStatus) => {
     const oldStatus = camera.status;
@@ -357,8 +442,26 @@ export default function CCTVDashboardSocProMax() {
       <div className="mx-auto grid min-h-screen max-w-[1800px] grid-cols-1 lg:grid-cols-[280px_1fr]">
         <aside className="border-r border-neutral-800 bg-[#060b12] p-5">
           <div className="text-sm font-semibold tracking-[0.22em] text-cyan-300">AIRPORT SOC</div>
+          {cameraAlerts.total > 0 && (
+            <div className="mt-3 rounded-xl border border-red-800 bg-red-900/30 px-3 py-2 text-xs text-red-200">
+              LIVE ALERTS • {cameraAlerts.total} (Offline: {cameraAlerts.offline} | Maint: {cameraAlerts.maintenance} | Removed: {cameraAlerts.removed})
+            </div>
+          )}
           <nav className="mt-6 space-y-2 text-sm">
-            {NAV_ITEMS.map(i => <button key={i} onClick={()=>setActiveView(i)} className="w-full rounded-xl border border-neutral-800 bg-neutral-900/80 hover:bg-neutral-800 px-3 py-2 text-left">{i}</button>)}
+            {NAV_ITEMS.map((item) => {
+              const Icon = item.icon;
+              const isActive = activeView === item.key;
+              return (
+                <button
+                  key={item.key}
+                  onClick={() => setActiveView(item.key)}
+                  className={`w-full rounded-xl border px-3 py-2 text-left flex items-center gap-2 ${isActive ? "border-cyan-700 bg-neutral-800 text-cyan-300" : "border-neutral-800 bg-neutral-900/80 hover:bg-neutral-800"}`}
+                >
+                  <Icon size={16} />
+                  <span>{item.label}</span>
+                </button>
+              );
+            })}
           </nav>
           <div className="mt-6 text-xs text-neutral-500 whitespace-pre-line">{`User: ${userName}\nRole: ${role}`}</div>
           <button onClick={async ()=>{ try{ if(auth) await signOut(auth);}catch{} setIsAuthed(false); }} className="mt-4 w-full rounded-xl border border-neutral-800 bg-neutral-900 px-3 py-2 text-xs hover:bg-neutral-800">Logout</button>
@@ -366,16 +469,16 @@ export default function CCTVDashboardSocProMax() {
 
         <main className="p-4 md:p-6 lg:p-8 space-y-4">
           <section className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-3">
-            <MetricCard title="Total" value={counts.total} />
-            <MetricCard title="Working" value={counts.working} tone="emerald" />
-            <MetricCard title="Offline" value={counts.offline} tone="slate" />
-            <MetricCard title="Maintenance" value={counts.maintenance} tone="amber" />
-            <MetricCard title="Removed" value={counts.removed} tone="red" />
+            <MetricCard title="Total" value={activeCounts.total} />
+            <MetricCard title="Working" value={activeCounts.working} tone="emerald" />
+            <MetricCard title="Offline" value={activeCounts.offline} tone="slate" />
+            <MetricCard title="Maintenance" value={activeCounts.maintenance} tone="amber" />
+            <MetricCard title="Removed" value={activeCounts.removed} tone="red" />
             <MetricCard title="Selected" value={selected.size} tone="cyan" />
-            <MetricCard title="Health" value={(counts.offline + counts.removed) > 0 ? "ATTN" : "OK"} tone={(counts.offline + counts.removed) > 0 ? "red" : "emerald"} />
+            <MetricCard title="Health" value={(activeCounts.offline + activeCounts.removed) > 0 ? "ATTN" : "OK"} tone={(activeCounts.offline + activeCounts.removed) > 0 ? "red" : "emerald"} />
           </section>
 
-          {activeView === "Dashboard" && (
+          {activeView === "CCTV Dashboard" && (
             <>
               <SectionCard title="Filters & Actions" right={<span className="text-xs text-neutral-400">{filtered.length} cameras</span>}>
                 <div className="grid grid-cols-1 md:grid-cols-8 gap-3">
@@ -393,8 +496,8 @@ export default function CCTVDashboardSocProMax() {
                   <button onClick={() => selectByStatus("offline")} className="rounded-lg border border-slate-700 bg-slate-900/40 px-3 py-1.5">Select Offline</button>
                   <button onClick={() => selectByStatus("maintenance")} className="rounded-lg border border-amber-700 bg-amber-900/30 px-3 py-1.5">Select Maintenance</button>
                   <button onClick={() => selectByStatus("removed")} className="rounded-lg border border-rose-700 bg-rose-900/30 px-3 py-1.5">Select Removed</button>
-                  <button onClick={() => selectByClient("T1")} className="rounded-lg border border-cyan-700 bg-cyan-900/20 px-3 py-1.5">Select T1</button>
-                  <button onClick={() => selectByClient("T2")} className="rounded-lg border border-cyan-700 bg-cyan-900/20 px-3 py-1.5">Select T2</button>
+                  <button onClick={() => selectByClient("T1")} className="rounded-lg border border-cyan-700 bg-cyan-900/20 px-3 py-1.5">Select T1 (Top)</button>
+                  <button onClick={() => selectByClient("T2")} className="rounded-lg border border-cyan-700 bg-cyan-900/20 px-3 py-1.5">Select T2 (Top)</button>
                   <span className="text-neutral-400 self-center">Selected: {selected.size}</span>
                 </div>
               </SectionCard>
@@ -415,24 +518,52 @@ export default function CCTVDashboardSocProMax() {
                         <th className="px-3 py-2 text-left">Location</th>
                         <th className="px-3 py-2 text-left">Status</th>
                         <th className="px-3 py-2 text-left">Quick Update</th>
+                        <th className="px-3 py-2 text-left">Actions</th>
                       </tr>
                     </thead>
                     <tbody>
                       {filtered.map(c => {
                         const s = STATUSES.find(x=>x.key===c.status) || STATUSES[0];
+                        const rowKey = getRowKey(c);
+                        const isEditing = editingCameraKey === rowKey;
                         return (
-                          <tr key={getRowKey(c)} className={`border-t border-neutral-800 ${s.row||""}`}>
-                            <td className="px-3 py-2"><input type="checkbox" checked={selected.has(getRowKey(c))} onChange={()=>toggleSelected(getRowKey(c))} /></td>
-                            <td className="px-3 py-2 text-cyan-200 font-semibold">{c.id}</td>
-                            <td className="px-3 py-2">{c.cameraName||"-"}</td>
-                            <td className="px-3 py-2">{c.client}</td>
-                            <td className="px-3 py-2">{c.location||"-"}</td>
-                            <td className="px-3 py-2"><StatusPill status={c.status} /></td>
+                          <tr key={rowKey} className={`border-t border-neutral-800 ${s.row||""}`}>
+                            <td className="px-3 py-2"><input type="checkbox" checked={selected.has(rowKey)} onChange={()=>toggleSelected(rowKey)} /></td>
+                            <td className="px-3 py-2 text-cyan-200 font-semibold">
+                              {isEditing ? <input value={editingCameraForm.id} onChange={(e)=>setEditingCameraForm(f=>({...f,id:e.target.value}))} className="w-full rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs" /> : c.id}
+                            </td>
+                            <td className="px-3 py-2">
+                              {isEditing ? <input value={editingCameraForm.cameraName} onChange={(e)=>setEditingCameraForm(f=>({...f,cameraName:e.target.value}))} className="w-full rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs" /> : (c.cameraName||"-")}
+                            </td>
+                            <td className="px-3 py-2">
+                              {isEditing ? <select value={editingCameraForm.client} onChange={(e)=>setEditingCameraForm(f=>({...f,client:e.target.value}))} className="rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs"><option value="T1">T1</option><option value="T2">T2</option></select> : c.client}
+                            </td>
+                            <td className="px-3 py-2">
+                              {isEditing ? <input value={editingCameraForm.location} onChange={(e)=>setEditingCameraForm(f=>({...f,location:e.target.value}))} className="w-full rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs" /> : (c.location||"-")}
+                            </td>
+                            <td className="px-3 py-2">
+                              {isEditing ? <select value={editingCameraForm.status} onChange={(e)=>setEditingCameraForm(f=>({...f,status:e.target.value}))} className="rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs">{STATUSES.map(st=><option key={st.key} value={st.key}>{st.label}</option>)}</select> : <div className="flex items-center gap-2"><StatusPill status={c.status} />{c.status === "offline" && <span className="text-[10px] px-2 py-0.5 rounded bg-red-900/40 border border-red-700 text-red-200">ALERT</span>}{c.status === "maintenance" && <span className="text-[10px] px-2 py-0.5 rounded bg-amber-900/40 border border-amber-700 text-amber-200">MAINT</span>}{c.status === "removed" && <span className="text-[10px] px-2 py-0.5 rounded bg-rose-900/40 border border-rose-700 text-rose-200">REMOVED</span>}</div>}
+                            </td>
                             <td className="px-3 py-2"><div className="flex flex-wrap gap-1">{STATUSES.map(st=><button key={st.key} onClick={()=>updateStatus(c, st.key)} className="px-2 py-1 rounded border border-neutral-700 bg-neutral-800 text-xs">{st.label}</button>)}</div></td>
+                            <td className="px-3 py-2">
+                              <div className="flex gap-2">
+                                {isEditing ? (
+                                  <>
+                                    <button onClick={saveEditCamera} className="px-2 py-1 text-xs rounded border border-emerald-700 bg-emerald-900/30 text-emerald-200">Save</button>
+                                    <button onClick={cancelEditCamera} className="px-2 py-1 text-xs rounded border border-neutral-700 bg-neutral-800">Cancel</button>
+                                  </>
+                                ) : (
+                                  <>
+                                    <button onClick={()=>startEditCamera(c)} className="px-2 py-1 text-xs rounded border border-neutral-700 bg-neutral-800">Edit</button>
+                                    <button onClick={()=>deleteCamera(rowKey)} className="px-2 py-1 text-xs rounded border border-rose-700 bg-rose-900/30 text-rose-200">Delete</button>
+                                  </>
+                                )}
+                              </div>
+                            </td>
                           </tr>
                         );
                       })}
-                      {filtered.length===0 && <tr><td colSpan={7} className="px-3 py-4 text-neutral-400">No cameras found</td></tr>}
+                      {filtered.length===0 && <tr><td colSpan={8} className="px-3 py-4 text-neutral-400">No cameras found</td></tr>}
                     </tbody>
                   </table>
                 </div>
