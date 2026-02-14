@@ -1,33 +1,17 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Monitor, Radio, ShieldCheck, FileText } from "lucide-react";
 import { initializeApp, getApps } from "firebase/app";
 import { getAuth, signInWithEmailAndPassword, signOut } from "firebase/auth";
 import {
   getFirestore,
   collection,
-  doc,
   onSnapshot,
+  doc,
+  setDoc,
   updateDoc,
-  serverTimestamp,
-  getDoc,
-  addDoc,
+  deleteDoc,
 } from "firebase/firestore";
 
-/* ================= ENTERPRISE SOC CONFIG ================= */
-
-const STATUSES = [
-  { key: "working", label: "Working", color: "bg-emerald-500" },
-  { key: "offline", label: "Offline", color: "bg-red-600" },
-  { key: "maintenance", label: "Maintenance", color: "bg-amber-500" },
-  { key: "removed", label: "Removed", color: "bg-slate-600" },
-];
-
-const NAV_ITEMS = [
-  { key: "CCTV Dashboard", icon: Monitor },
-  { key: "RT Inventory", icon: Radio },
-  { key: "Supervisor View", icon: ShieldCheck },
-  { key: "Shift Reports", icon: FileText },
-];
+/* ================= FIREBASE ================= */
 
 const firebaseConfig = {
   apiKey: "AIzaSyBYihneL5770d1gLfwWAJ_sKjfL_hlgUws",
@@ -38,197 +22,284 @@ const firebaseConfig = {
   appId: "1:85978595792:web:5b6c5de9dbd737205bf9d5",
 };
 
-let app, auth, db;
-try {
-  app = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
-  auth = getAuth(app);
-  db = getFirestore(app);
-} catch (e) {
-  console.error(e);
-}
+const app = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
 
-/* ================= UI COMPONENTS ================= */
-
-const StatusPill = ({ status }) => {
-  const s = STATUSES.find(x => x.key === status);
-  return (
-    <span className={`px-2 py-1 text-xs rounded-full text-white ${s?.color}`}>
-      {s?.label}
-    </span>
-  );
-};
-
-const Metric = ({ title, value }) => (
-  <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-4">
-    <div className="text-xs text-neutral-400 uppercase">{title}</div>
-    <div className="text-2xl font-bold text-cyan-300">{value}</div>
-  </div>
-);
-
-/* ================= MAIN APP ================= */
+const STATUSES = ["working", "offline", "maintenance", "removed"];
 
 export default function App() {
+  const [view, setView] = useState("CCTV");
   const [isAuthed, setIsAuthed] = useState(false);
-  const [login, setLogin] = useState({ username:"", password:"" });
-  const [authError, setAuthError] = useState("");
-  const [activeView, setActiveView] = useState("CCTV Dashboard");
+  const [error, setError] = useState("");
+
+  const [login, setLogin] = useState({ username: "", password: "" });
 
   const [cameras, setCameras] = useState([]);
+  const [rts, setRts] = useState([]);
+
+  const [form, setForm] = useState({
+    id: "",
+    name: "",
+    client: "T1",
+    location: "",
+    status: "working",
+  });
+
+  /* ============= LIVE FIREBASE ============= */
 
   useEffect(() => {
-    if (!db) return;
-    return onSnapshot(collection(db,"cameras"), snap => {
-      const rows = [];
-      snap.forEach(d => rows.push({ docId:d.id, ...d.data() }));
-      setCameras(rows);
+    return onSnapshot(collection(db, "cameras"), (snap) => {
+      setCameras(snap.docs.map((d) => ({ docId: d.id, ...d.data() })));
     });
   }, []);
 
-  const counts = useMemo(()=>{
-    const c = { total:cameras.length, working:0, offline:0 };
-    cameras.forEach(x=>{
-      if(x.status==="working") c.working++;
-      if(x.status==="offline") c.offline++;
+  useEffect(() => {
+    return onSnapshot(collection(db, "rt_inventory"), (snap) => {
+      setRts(snap.docs.map((d) => ({ docId: d.id, ...d.data() })));
+    });
+  }, []);
+
+  const data = view === "CCTV" ? cameras : rts;
+
+  /* ============= LIVE COUNTS ============= */
+
+  const counts = useMemo(() => {
+    const c = {
+      total: data.length,
+      working: 0,
+      offline: 0,
+      maintenance: 0,
+      removed: 0,
+    };
+    data.forEach((x) => {
+      if (c[x.status] !== undefined) c[x.status]++;
     });
     return c;
-  },[cameras]);
+  }, [data]);
 
-  /* ===== LOGIN SCREEN ===== */
+  /* ============= CRUD ============= */
 
-  if(!isAuthed){
+  const addItem = async () => {
+    if (!form.id) return;
+
+    const col = view === "CCTV" ? "cameras" : "rt_inventory";
+
+    await setDoc(
+      doc(db, col, form.id.trim()),
+      { ...form, id: form.id.trim() },
+      { merge: true }
+    );
+
+    setForm({
+      id: "",
+      name: "",
+      client: "T1",
+      location: "",
+      status: "working",
+    });
+  };
+
+  const updateField = async (item, key, value) => {
+    const col = view === "CCTV" ? "cameras" : "rt_inventory";
+    await updateDoc(doc(db, col, item.docId), { [key]: value });
+  };
+
+  const deleteItem = async (item) => {
+    const col = view === "CCTV" ? "cameras" : "rt_inventory";
+    await deleteDoc(doc(db, col, item.docId));
+  };
+
+  /* ============= CSV EXPORT ============= */
+
+  const exportCSV = () => {
+    const rows = data.map(
+      (i) =>
+        `${i.id},${i.name || ""},${i.client || ""},${i.location || ""},${
+          i.status
+        }`
+    );
+
+    const csv = "id,name,client,location,status\n" + rows.join("\n");
+
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${view}_export.csv`;
+    a.click();
+  };
+
+  /* ============= CSV UPLOAD ============= */
+
+  const uploadCSV = async (e, client) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const text = await file.text();
+    const lines = text.split("\n").filter(Boolean);
+
+    for (let i = 1; i < lines.length; i++) {
+      const [id, name, location, status] = lines[i].split(",");
+      if (!id) continue;
+
+      await setDoc(
+        doc(db, "cameras", id.trim()),
+        {
+          id: id.trim(),
+          name: name || id,
+          client,
+          location: location || "",
+          status: (status || "working").toLowerCase(),
+        },
+        { merge: true }
+      );
+    }
+  };
+
+  /* ============= LOGIN ============= */
+
+  if (!isAuthed) {
     return (
-      <div className="min-h-screen bg-[#05070b] flex items-center justify-center">
-        <div className="w-full max-w-md bg-neutral-900 border border-neutral-800 rounded-2xl p-6">
-          <h1 className="text-2xl font-bold text-cyan-300 mb-4">
-            🛡 AIRPORT SOC LOGIN
-          </h1>
+      <div className="min-h-screen bg-black flex items-center justify-center text-white">
+        <div className="bg-neutral-900 p-6 rounded-xl w-96">
+          <h1 className="text-xl mb-3">🛡 SOC Login</h1>
 
           <input
-            className="w-full mb-2 rounded bg-neutral-800 p-2"
+            className="w-full p-2 mb-2 bg-neutral-800 rounded"
             placeholder="Email"
-            value={login.username}
-            onChange={e=>setLogin({...login,username:e.target.value})}
+            onChange={(e) =>
+              setLogin({ ...login, username: e.target.value })
+            }
           />
 
           <input
             type="password"
-            className="w-full mb-3 rounded bg-neutral-800 p-2"
+            className="w-full p-2 mb-3 bg-neutral-800 rounded"
             placeholder="Password"
-            value={login.password}
-            onChange={e=>setLogin({...login,password:e.target.value})}
+            onChange={(e) =>
+              setLogin({ ...login, password: e.target.value })
+            }
           />
 
           <button
-            className="w-full bg-cyan-600 hover:bg-cyan-500 rounded p-2 font-semibold"
-            onClick={async()=>{
-              try{
+            className="w-full bg-cyan-600 p-2 rounded"
+            onClick={async () => {
+              try {
+                setError("");
                 await signInWithEmailAndPassword(
                   auth,
                   login.username,
                   login.password
                 );
                 setIsAuthed(true);
-              }catch(err){
-                setAuthError(err.message);
+              } catch (err) {
+                setError(err.message);
               }
             }}
           >
             Login
           </button>
 
-          {authError && <p className="text-red-400 mt-2 text-sm">{authError}</p>}
+          {error && <div className="text-red-400 text-xs mt-2">{error}</div>}
         </div>
       </div>
     );
   }
 
-  /* ===== ENTERPRISE DASHBOARD ===== */
+  /* ============= DASHBOARD ============= */
 
   return (
-    <div className="min-h-screen bg-[#05070b] text-white flex">
+    <div className="min-h-screen bg-[#05070b] text-white p-5">
 
-      {/* SIDEBAR */}
-      <aside className="w-64 border-r border-neutral-800 bg-[#060b12] p-5">
-        <h1 className="text-cyan-300 font-bold tracking-wider">
-          AIRPORT SOC
-        </h1>
+      <div className="flex justify-between mb-4">
+        <div className="flex gap-2">
+          <button onClick={() => setView("CCTV")} className="bg-cyan-600 px-3 py-2 rounded">CCTV Dashboard</button>
+          <button onClick={() => setView("RT")} className="bg-neutral-800 px-3 py-2 rounded">RT Dashboard</button>
+        </div>
 
-        <nav className="mt-6 space-y-2">
-          {NAV_ITEMS.map(n=>{
-            const Icon=n.icon;
-            return (
-              <button
-                key={n.key}
-                onClick={()=>setActiveView(n.key)}
-                className="w-full flex items-center gap-2 p-2 rounded-lg bg-neutral-900 hover:bg-neutral-800"
-              >
-                <Icon size={16}/> {n.key}
-              </button>
-            );
-          })}
-        </nav>
-
-        <button
-          onClick={()=>signOut(auth)}
-          className="mt-8 w-full bg-neutral-800 p-2 rounded"
-        >
+        <button onClick={() => signOut(auth)} className="bg-red-600 px-3 py-2 rounded">
           Logout
         </button>
-      </aside>
+      </div>
 
-      {/* MAIN */}
-      <main className="flex-1 p-6 space-y-4">
+      <div className="grid md:grid-cols-5 gap-3 mb-4">
+        {Object.entries(counts).map(([k, v]) => (
+          <div key={k} className="bg-neutral-900 p-3 rounded">{k}: {v}</div>
+        ))}
+      </div>
 
-        {/* COMMAND BAR */}
-        <section className="bg-cyan-950/30 border border-cyan-800 rounded-xl p-4">
-          <div className="text-cyan-300 font-bold">
-            🛡 ENTERPRISE SOC COMMAND CENTER
-          </div>
-        </section>
+      {view === "CCTV" && (
+        <div className="flex gap-2 mb-4">
+          <label className="bg-neutral-800 p-2 rounded cursor-pointer">
+            Upload T1 CSV
+            <input hidden type="file" onChange={(e) => uploadCSV(e, "T1")} />
+          </label>
 
-        {/* METRICS */}
-        <section className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <Metric title="Total Cameras" value={counts.total}/>
-          <Metric title="Working" value={counts.working}/>
-          <Metric title="Offline" value={counts.offline}/>
-          <Metric title="System Health" value={counts.offline>0?"CRITICAL":"STABLE"}/>
-        </section>
+          <label className="bg-neutral-800 p-2 rounded cursor-pointer">
+            Upload T2 CSV
+            <input hidden type="file" onChange={(e) => uploadCSV(e, "T2")} />
+          </label>
 
-        {/* CAMERA GRID */}
-        <section className="bg-neutral-900 border border-neutral-800 rounded-xl p-4">
-          <h2 className="mb-3 font-semibold text-cyan-300">Live Camera Grid</h2>
+          <button onClick={exportCSV} className="bg-cyan-700 p-2 rounded">
+            Export CSV
+          </button>
+        </div>
+      )}
 
-          <div className="overflow-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-neutral-800">
-                <tr>
-                  <th className="p-2 text-left">ID</th>
-                  <th className="p-2 text-left">Location</th>
-                  <th className="p-2 text-left">Status</th>
-                </tr>
-              </thead>
+      <table className="w-full bg-neutral-900">
+        <thead className="bg-neutral-800">
+          <tr>
+            <th>ID</th><th>Name</th><th>Client</th>
+            <th>Location</th><th>Status</th><th>Delete</th>
+          </tr>
+        </thead>
 
-              <tbody>
-                {cameras.map(c=>(
-                  <tr
-                    key={c.id}
-                    className={`border-t border-neutral-800 ${
-                      c.status==="offline"
-                        ? "bg-red-950/30 animate-pulse"
-                        : ""
-                    }`}
-                  >
-                    <td className="p-2">{c.id}</td>
-                    <td className="p-2">{c.location}</td>
-                    <td className="p-2"><StatusPill status={c.status}/></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
+        <tbody>
+          {data.map((item) => (
+            <tr key={item.docId} className="border-t border-neutral-700">
+              <td>{item.id}</td>
 
-      </main>
+              <td>
+                <input
+                  value={item.name || ""}
+                  onChange={(e) => updateField(item, "name", e.target.value)}
+                  className="bg-neutral-800 p-1"
+                />
+              </td>
+
+              <td>{item.client}</td>
+
+              <td>
+                <input
+                  value={item.location || ""}
+                  onChange={(e) => updateField(item, "location", e.target.value)}
+                  className="bg-neutral-800 p-1"
+                />
+              </td>
+
+              <td>
+                <select
+                  value={item.status}
+                  onChange={(e) => updateField(item, "status", e.target.value)}
+                  className="bg-neutral-800"
+                >
+                  {STATUSES.map((s) => (
+                    <option key={s}>{s}</option>
+                  ))}
+                </select>
+              </td>
+
+              <td>
+                <button onClick={() => deleteItem(item)} className="bg-red-600 px-2 rounded">
+                  Delete
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
