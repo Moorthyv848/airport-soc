@@ -106,6 +106,12 @@ function AddCameraInline({ onAdd }) {
 }
 
 export default function CCTVDashboardSocProMax() {
+  const resolveRoleFromEmail = (email) => {
+    const e = String(email || "").toLowerCase().trim();
+    if (e === "admin@airport.com" || e.includes("admin")) return "admin";
+    if (e.includes("supervisor") || e.includes("sup")) return "supervisor";
+    return "operator";
+  };
   const [activeView, setActiveView] = useState("CCTV Dashboard");
   const [isAuthed, setIsAuthed] = useState(false);
   const [login, setLogin] = useState({ username: "", password: "" });
@@ -265,7 +271,15 @@ export default function CCTVDashboardSocProMax() {
   };
 
   if(!isAuthed){
-    return <div className="min-h-screen bg-[#05070b] text-neutral-100 grid place-items-center p-4"><div className="w-full max-w-md rounded-2xl border border-neutral-800 bg-neutral-900/90 p-6"><h1 className="text-xl font-bold text-white">Airport SOC Login</h1><div className="mt-4 space-y-3"><input value={login.username} onChange={e=>setLogin({...login,username:e.target.value})} placeholder="Email" className="w-full rounded-xl border border-neutral-700 bg-neutral-800 px-3 py-2" /><input type="password" value={login.password} onChange={e=>setLogin({...login,password:e.target.value})} placeholder="Password" className="w-full rounded-xl border border-neutral-700 bg-neutral-800 px-3 py-2" /><button className="w-full rounded-xl bg-cyan-600 px-3 py-2 font-semibold" onClick={async()=>{ setAuthError(""); if(!auth) return setAuthError("Firebase not connected"); try{ const cred=await signInWithEmailAndPassword(auth,login.username.trim(),login.password); setUserName(cred.user.email||login.username); if(db){ const snap=await getDoc(doc(db,"users",cred.user.email||login.username)); if(snap.exists()) setRole(snap.data()?.role||"operator"); } setIsAuthed(true);}catch{ setAuthError("Invalid login credentials"); }}}>Login to Control Room</button>{authError && <div className="text-xs text-red-400">{authError}</div>}</div></div></div>;
+    return <div className="min-h-screen bg-[#05070b] text-neutral-100 grid place-items-center p-4"><div className="w-full max-w-md rounded-2xl border border-neutral-800 bg-neutral-900/90 p-6"><h1 className="text-xl font-bold text-white">Airport SOC Login</h1><div className="mt-4 space-y-3"><input value={login.username} onChange={e=>setLogin({...login,username:e.target.value})} placeholder="Email" className="w-full rounded-xl border border-neutral-700 bg-neutral-800 px-3 py-2" /><input type="password" value={login.password} onChange={e=>setLogin({...login,password:e.target.value})} placeholder="Password" className="w-full rounded-xl border border-neutral-700 bg-neutral-800 px-3 py-2" /><button className="w-full rounded-xl bg-cyan-600 px-3 py-2 font-semibold" onClick={async()=>{ setAuthError(""); if(!auth) return setAuthError("Firebase not connected"); try{ const cred=await signInWithEmailAndPassword(auth,login.username.trim(),login.password); const email = (cred.user.email||login.username||"").trim(); setUserName(email);
+                  let resolvedRole = resolveRoleFromEmail(email);
+                  if(db){
+                    const snap=await getDoc(doc(db,"users",email));
+                    if(snap.exists()) resolvedRole = snap.data()?.role || resolvedRole;
+                  }
+                  setRole(resolvedRole);
+                  setIsAuthed(true);
+                }catch{ setAuthError("Invalid login credentials"); }}}>Login to Control Room</button>{authError && <div className="text-xs text-red-400">{authError}</div>}</div></div></div>;
   }
 
   return (
