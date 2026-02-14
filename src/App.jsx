@@ -134,7 +134,7 @@ export default function CCTVDashboardSocProMax() {
   const [authError, setAuthError] = useState("");
 
   const [cameras, setCameras] = useState(seedCameras);
-  const [selected, setSelected] = useState(new Set());
+  const [selected, setSelected] = useState(new Set()); // stores stable row keys (docId || id)
   const [bulkStatus, setBulkStatus] = useState("working");
   const [q, setQ] = useState("");
   const [client, setClient] = useState("ALL");
@@ -147,7 +147,14 @@ export default function CCTVDashboardSocProMax() {
     if (!db) return;
     const unsub = onSnapshot(collection(db, "cameras"), (snap) => {
       const rows = [];
-      snap.forEach((d) => rows.push({ docId: d.id, ...d.data() }));
+      snap.forEach((d) => {
+      const data = d.data() || {};
+      rows.push({
+        docId: d.id,
+        id: data.id || d.id,
+        ...data,
+      });
+    });
       if (rows.length) setCameras(rows);
     });
     return () => unsub();
@@ -166,10 +173,39 @@ export default function CCTVDashboardSocProMax() {
 
   const canBulk = role !== "operator";
 
-  const toggleSelected = (id) => {
+  const getRowKey = (c) => c.docId || c.id;
+
+  const toggleSelected = (rowKey) => {
     setSelected((prev) => {
       const n = new Set(prev);
-      if (n.has(id)) n.delete(id); else n.add(id);
+      if (n.has(rowKey)) n.delete(rowKey);
+      else n.add(rowKey);
+      return n;
+    });
+  };
+
+  const selectVisible = () => {
+    setSelected((prev) => {
+      const n = new Set(prev);
+      filtered.forEach((c) => n.add(c.docId || c.id));
+      return n;
+    });
+  };
+
+  const clearSelection = () => setSelected(new Set());
+
+  const selectByStatus = (statusKey) => {
+    setSelected((prev) => {
+      const n = new Set(prev);
+      cameras.filter((c) => c.status === statusKey).forEach((c) => n.add(c.docId || c.id));
+      return n;
+    });
+  };
+
+  const selectByClient = (clientKey) => {
+    setSelected((prev) => {
+      const n = new Set(prev);
+      cameras.filter((c) => c.client === clientKey).forEach((c) => n.add(c.docId || c.id));
       return n;
     });
   };
@@ -188,7 +224,8 @@ export default function CCTVDashboardSocProMax() {
     if (!db || !selected.size) return;
     const batch = writeBatch(db);
     cameras.forEach((c) => {
-      if (selected.has(c.id) && c.docId) {
+      const rowKey = c.docId || c.id;
+      if (selected.has(rowKey) && c.docId) {
         batch.update(doc(db, "cameras", c.docId), { status: bulkStatus, updatedAt: serverTimestamp(), updatedBy: userName || "operator" });
       }
     });
@@ -288,6 +325,17 @@ export default function CCTVDashboardSocProMax() {
                   <label className="rounded-xl border border-neutral-700 bg-neutral-800 px-3 py-2 text-center cursor-pointer hover:bg-neutral-700">Upload CSV T2<input type="file" accept=".csv" className="hidden" onChange={(e)=>handleCsvUpload(e,"T2")} /></label>
                   {canBulk && <button onClick={applyBulkUpdate} className="rounded-xl bg-emerald-600 px-3 py-2">Bulk Apply</button>}
                 </div>
+
+                <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                  <button onClick={selectVisible} className="rounded-lg border border-neutral-700 bg-neutral-800 px-3 py-1.5 hover:bg-neutral-700">Select Visible</button>
+                  <button onClick={clearSelection} className="rounded-lg border border-neutral-700 bg-neutral-800 px-3 py-1.5 hover:bg-neutral-700">Clear Selection</button>
+                  <button onClick={() => selectByStatus("offline")} className="rounded-lg border border-slate-700 bg-slate-900/40 px-3 py-1.5">Select Offline</button>
+                  <button onClick={() => selectByStatus("maintenance")} className="rounded-lg border border-amber-700 bg-amber-900/30 px-3 py-1.5">Select Maintenance</button>
+                  <button onClick={() => selectByStatus("removed")} className="rounded-lg border border-rose-700 bg-rose-900/30 px-3 py-1.5">Select Removed</button>
+                  <button onClick={() => selectByClient("T1")} className="rounded-lg border border-cyan-700 bg-cyan-900/20 px-3 py-1.5">Select T1</button>
+                  <button onClick={() => selectByClient("T2")} className="rounded-lg border border-cyan-700 bg-cyan-900/20 px-3 py-1.5">Select T2</button>
+                  <span className="text-neutral-400 self-center">Selected: {selected.size}</span>
+                </div>
               </SectionCard>
 
               <SectionCard title="Add Camera" right={<span className="text-xs text-neutral-400">Manual entry</span>}>
@@ -295,7 +343,7 @@ export default function CCTVDashboardSocProMax() {
               </SectionCard>
 
               <SectionCard title="Live Camera Grid" right={<span className="text-xs text-neutral-400">Realtime</span>}>
-                <div className="overflow-auto"><table className="w-full text-sm"><thead className="bg-neutral-800 text-neutral-300"><tr><th className="px-3 py-2 text-left">Select</th><th className="px-3 py-2 text-left">Camera ID</th><th className="px-3 py-2 text-left">Camera Name</th><th className="px-3 py-2 text-left">Client</th><th className="px-3 py-2 text-left">Location</th><th className="px-3 py-2 text-left">Status</th><th className="px-3 py-2 text-left">Quick Update</th></tr></thead><tbody>{filtered.map(c=>{const s=STATUSES.find(x=>x.key===c.status)||STATUSES[0]; return <tr key={c.id} className={`border-t border-neutral-800 ${s.row||""}`}><td className="px-3 py-2"><input type="checkbox" checked={selected.has(c.id)} onChange={()=>toggleSelected(c.id)} /></td><td className="px-3 py-2 text-cyan-200 font-semibold">{c.id}</td><td className="px-3 py-2">{c.cameraName||"-"}</td><td className="px-3 py-2">{c.client}</td><td className="px-3 py-2">{c.location||"-"}</td><td className="px-3 py-2"><StatusPill status={c.status} /></td><td className="px-3 py-2"><div className="flex flex-wrap gap-1">{STATUSES.map(st=><button key={st.key} onClick={()=>updateStatus(c, st.key)} className="px-2 py-1 rounded border border-neutral-700 bg-neutral-800 text-xs">{st.label}</button>)}</div></td></tr>;})}{filtered.length===0 && <tr><td colSpan={7} className="px-3 py-4 text-neutral-400">No cameras found</td></tr>}</tbody></table></div>
+                <div className="overflow-auto"><table className="w-full text-sm"><thead className="bg-neutral-800 text-neutral-300"><tr><th className="px-3 py-2 text-left">Select</th><th className="px-3 py-2 text-left">Camera ID</th><th className="px-3 py-2 text-left">Camera Name</th><th className="px-3 py-2 text-left">Client</th><th className="px-3 py-2 text-left">Location</th><th className="px-3 py-2 text-left">Status</th><th className="px-3 py-2 text-left">Quick Update</th></tr></thead><tbody>{filtered.map(c=>{const s=STATUSES.find(x=>x.key===c.status)||STATUSES[0]; return <tr key={c.id} className={`border-t border-neutral-800 ${s.row||""}`}><td className="px-3 py-2"><input type="checkbox" checked={selected.has(c.docId || c.id)} onChange={()=>toggleSelected(c.docId || c.id)} /></td><td className="px-3 py-2 text-cyan-200 font-semibold">{c.id}</td><td className="px-3 py-2">{c.cameraName||"-"}</td><td className="px-3 py-2">{c.client}</td><td className="px-3 py-2">{c.location||"-"}</td><td className="px-3 py-2"><StatusPill status={c.status} /></td><td className="px-3 py-2"><div className="flex flex-wrap gap-1">{STATUSES.map(st=><button key={st.key} onClick={()=>updateStatus(c, st.key)} className="px-2 py-1 rounded border border-neutral-700 bg-neutral-800 text-xs">{st.label}</button>)}</div></td></tr>;})}{filtered.length===0 && <tr><td colSpan={7} className="px-3 py-4 text-neutral-400">No cameras found</td></tr>}</tbody></table></div>
               </SectionCard>
             </>
           )}
