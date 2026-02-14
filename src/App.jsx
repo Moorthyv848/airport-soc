@@ -2,14 +2,23 @@ import React, { useEffect, useMemo, useState } from "react";
 import { Monitor, Radio, ShieldCheck, FileText } from "lucide-react";
 import { initializeApp, getApps } from "firebase/app";
 import { getAuth, signInWithEmailAndPassword, signOut } from "firebase/auth";
-import { getFirestore, collection, doc, onSnapshot, updateDoc, serverTimestamp, getDoc, addDoc, setDoc, writeBatch } from "firebase/firestore";
+import {
+  getFirestore,
+  collection,
+  doc,
+  onSnapshot,
+  updateDoc,
+  serverTimestamp,
+  getDoc,
+  addDoc,
+  writeBatch,
+} from "firebase/firestore";
 
 /*
- SOC ELITE — CLEAN SINGLE SOURCE VERSION
- - No duplicate blocks
+ SOC ELITE — CLEAN SINGLE SOURCE VERSION (FIXED)
+ - Fixed unterminated string constants in CSV builders
+ - Fixed newline split regexes
  - Compile-safe JSX
- - CCTV + RT Enterprise features
- - Incident panel + replay
 */
 
 const STATUSES = [
@@ -106,7 +115,6 @@ export default function CCTVDashboardSocProMax() {
 
   const [cameras, setCameras] = useState(seedCameras);
   const [selected, setSelected] = useState(new Set());
-  const [bulkStatus, setBulkStatus] = useState("working");
   const [q, setQ] = useState("");
   const [client, setClient] = useState("ALL");
   const [status, setStatus] = useState("ALL");
@@ -118,6 +126,8 @@ export default function CCTVDashboardSocProMax() {
   const [actionHistory, setActionHistory] = useState([]);
 
   const [rtInventory, setRtInventory] = useState([]);
+  const [editingRtKey, setEditingRtKey] = useState(null);
+  const [editingRtForm, setEditingRtForm] = useState({ rtNumber:"", location:"T1", status:"working" });
   const [rtForm, setRtForm] = useState({ rtNumber: "", location: "T1", status: "working" });
   const RT_LOCATIONS = ["T1","T2","Landside","Control Room"];
 
@@ -173,14 +183,86 @@ export default function CCTVDashboardSocProMax() {
   const selectVisible=()=> setSelected(new Set(filtered.map(getRowKey)));
   const clearSelection=()=> setSelected(new Set());
 
-  const applyBulkUpdate = async ()=>{
-    if(!selected.size) return;
-    setCameras(prev=>prev.map(c=>selected.has(getRowKey(c))?{...c,status:bulkStatus,updatedAt:new Date().toISOString(),updatedBy:userName||"operator"}:c));
-    if(db){ const batch=writeBatch(db); cameras.forEach(c=>{ if(selected.has(getRowKey(c)) && c.docId){ batch.update(doc(db,"cameras",c.docId),{status:bulkStatus,updatedAt:serverTimestamp(),updatedBy:userName||"operator"}); }}); try{ await batch.commit(); }catch{} }
-    clearSelection();
+  const exportCsv = () => {
+    const header = ["CameraID","Client","CameraName","Status","Location","UpdatedAt","UpdatedBy"];
+    const rows = filtered.map(c => [c.id, c.client, c.cameraName || "", c.status, c.location || "", c.updatedAt || "", c.updatedBy || ""]);
+    const csv = [header, ...rows]
+      .map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(","))
+      .join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `cctv_report_${new Date().toISOString().slice(0,10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleCsvUpload = async (e, forcedClient) => {
+    const file = e.target.files?.[0]; if (!file) return;
+    const text = await file.text();
+    const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    if (lines.length < 2) return;
+    const headers = lines[0].split(",").map(h => h.trim().toLowerCase());
+    const idx = (n) => headers.indexOf(n);
+    const idIdx = idx("cameraid") >= 0 ? idx("cameraid") : idx("id");
+    if (idIdx < 0) return;
+    const nameIdx = idx("cameraname");
+    const locationIdx = idx("location");
+    const statusIdx = idx("status");
+    const parsed = lines.slice(1).map(line => {
+      const cols = line.split(",");
+      const id = (cols[idIdx] || "").trim();
+      if (!id) return null;
+      return { id, cameraName: nameIdx >= 0 ? (cols[nameIdx] || "").trim() : id, client: forcedClient || "T1", location: locationIdx >= 0 ? (cols[locationIdx] || "").trim() : "Unknown", status: statusIdx >= 0 ? (cols[statusIdx] || "working").trim().toLowerCase() : "working", updatedAt: new Date().toISOString(), updatedBy: "csv" };
+    }).filter(Boolean);
+    setCameras(prev => {
+      const map = new Map(prev.map(c => [c.id, c]));
+      parsed.forEach(c => map.set(c.id, { ...(map.get(c.id) || {}), ...c }));
+      return Array.from(map.values());
+    });
+    e.target.value = "";
   };
 
   const addRT=()=>{ const rt=rtForm.rtNumber.trim(); if(!rt) return; setRtInventory(prev=>[{ rtNumber:rt, location:rtForm.location, status:rtForm.status, updatedAt:new Date().toISOString() }, ...prev.filter(x=>x.rtNumber!==rt)]); setRtForm(f=>({...f,rtNumber:""})); pushIncident(`RT ${rt} added/updated`); };
+  const startEditRT = (r) => { setEditingRtKey(r.rtNumber); setEditingRtForm({ rtNumber:r.rtNumber, location:r.location, status:r.status }); };
+  const saveEditRT = (originalKey) => { const key = editingRtForm.rtNumber.trim(); if(!key) return; setRtInventory(prev => [{ rtNumber:key, location:editingRtForm.location, status:editingRtForm.status, updatedAt:new Date().toISOString() }, ...prev.filter(x => x.rtNumber !== originalKey && x.rtNumber !== key)]); setEditingRtKey(null); pushIncident(`RT ${originalKey} edited`); };
+  const deleteRT = (rtNumber) => { setRtInventory(prev=>prev.filter(x=>x.rtNumber!==rtNumber)); pushIncident(`RT ${rtNumber} deleted`,`warning`); };
+
+  const exportRtCsv = () => {
+    const header = ["RTNumber","Location","Status","UpdatedAt"];
+    const rows = rtInventory.map(r => [r.rtNumber, r.location, r.status, r.updatedAt || ""]);
+    const csv = [header, ...rows]
+      .map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(","))
+      .join("\n");
+    const blob = new Blob([csv], { type:"text/csv;charset=utf-8;"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = `rt_inventory_${new Date().toISOString().slice(0,10)}.csv`; a.click(); URL.revokeObjectURL(url);
+  };
+
+  const handleRtCsvUpload = async (e) => {
+    const file = e.target.files?.[0]; if(!file) return;
+    const text = await file.text();
+    const lines = text.split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
+    if(lines.length < 2) return;
+    const headers = lines[0].split(",").map(h=>h.trim().toLowerCase());
+    const idx = (n) => headers.indexOf(n);
+    const rtIdx = idx("rtnumber") >= 0 ? idx("rtnumber") : idx("rt");
+    if(rtIdx < 0) return;
+    const locIdx = idx("location");
+    const stIdx = idx("status");
+    const parsed = lines.slice(1).map(line => {
+      const cols = line.split(",");
+      const rt = (cols[rtIdx]||"").trim(); if(!rt) return null;
+      return { rtNumber: rt, location: locIdx>=0 ? (cols[locIdx]||"T1").trim() : "T1", status: stIdx>=0 ? (cols[stIdx]||"working").trim().toLowerCase() : "working", updatedAt:new Date().toISOString() };
+    }).filter(Boolean);
+    setRtInventory(prev => {
+      const map = new Map(prev.map(r=>[r.rtNumber, r]));
+      parsed.forEach(r=>map.set(r.rtNumber, { ...(map.get(r.rtNumber)||{}), ...r }));
+      return Array.from(map.values());
+    });
+    e.target.value = "";
+  };
 
   if(!isAuthed){
     return <div className="min-h-screen bg-[#05070b] text-neutral-100 grid place-items-center p-4"><div className="w-full max-w-md rounded-2xl border border-neutral-800 bg-neutral-900/90 p-6"><h1 className="text-xl font-bold text-white">Airport SOC Login</h1><div className="mt-4 space-y-3"><input value={login.username} onChange={e=>setLogin({...login,username:e.target.value})} placeholder="Email" className="w-full rounded-xl border border-neutral-700 bg-neutral-800 px-3 py-2" /><input type="password" value={login.password} onChange={e=>setLogin({...login,password:e.target.value})} placeholder="Password" className="w-full rounded-xl border border-neutral-700 bg-neutral-800 px-3 py-2" /><button className="w-full rounded-xl bg-cyan-600 px-3 py-2 font-semibold" onClick={async()=>{ setAuthError(""); if(!auth) return setAuthError("Firebase not connected"); try{ const cred=await signInWithEmailAndPassword(auth,login.username.trim(),login.password); setUserName(cred.user.email||login.username); if(db){ const snap=await getDoc(doc(db,"users",cred.user.email||login.username)); if(snap.exists()) setRole(snap.data()?.role||"operator"); } setIsAuthed(true);}catch{ setAuthError("Invalid login credentials"); }}}>Login to Control Room</button>{authError && <div className="text-xs text-red-400">{authError}</div>}</div></div></div>;
@@ -197,6 +279,19 @@ export default function CCTVDashboardSocProMax() {
         </aside>
 
         <main className="p-4 md:p-6 lg:p-8 space-y-4">
+          {/* SOC COMMAND CENTER STATUS BAR */}
+          <section className="rounded-2xl border border-cyan-900/60 bg-cyan-950/30 px-4 py-3">
+            <div className="flex flex-wrap items-center gap-3 text-xs md:text-sm">
+              <span className="inline-flex items-center gap-2 rounded-full border border-cyan-800 bg-cyan-900/40 px-3 py-1 text-cyan-200">🛡️ SOC COMMAND CENTER</span>
+              <span className="inline-flex items-center gap-2 rounded-full border border-neutral-700 bg-neutral-900 px-3 py-1 text-neutral-200">Total: {activeCounts.total}</span>
+              <span className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 ${activeCounts.offline > 0 ? "border-red-700 bg-red-950/40 text-red-200 animate-pulse" : "border-emerald-700 bg-emerald-950/40 text-emerald-200"}`}>
+                {activeCounts.offline > 0 ? "🔴 CRITICAL" : "🟢 STABLE"}
+              </span>
+              <span className="inline-flex items-center gap-2 rounded-full border border-neutral-700 bg-neutral-900 px-3 py-1 text-neutral-200">Offline: {activeCounts.offline}</span>
+              <span className="inline-flex items-center gap-2 rounded-full border border-neutral-700 bg-neutral-900 px-3 py-1 text-neutral-200">Maintenance: {activeCounts.maintenance}</span>
+              <span className="inline-flex items-center gap-2 rounded-full border border-neutral-700 bg-neutral-900 px-3 py-1 text-neutral-200">Removed: {activeCounts.removed}</span>
+            </div>
+          </section>
           <section className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-3">
             <MetricCard title="Total" value={activeCounts.total} />
             <MetricCard title="Working" value={activeCounts.working} />
@@ -209,29 +304,83 @@ export default function CCTVDashboardSocProMax() {
 
           {activeView==="CCTV Dashboard" && <>
             <SectionCard title="Filters & Actions" right={<span className="text-xs text-neutral-400">{filtered.length} cameras</span>}>
-              <div className="grid grid-cols-1 md:grid-cols-6 gap-2">
+              <div className="grid grid-cols-1 md:grid-cols-7 gap-2">
                 <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search" className="rounded-xl border border-neutral-700 bg-neutral-800 px-3 py-2" />
                 <select value={client} onChange={e=>setClient(e.target.value)} className="rounded-xl border border-neutral-700 bg-neutral-800 px-3 py-2"><option value="ALL">All Clients</option><option value="T1">T1</option><option value="T2">T2</option></select>
                 <select value={status} onChange={e=>setStatus(e.target.value)} className="rounded-xl border border-neutral-700 bg-neutral-800 px-3 py-2"><option value="ALL">All Status</option>{STATUSES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select>
-                <select value={bulkStatus} onChange={e=>setBulkStatus(e.target.value)} className="rounded-xl border border-neutral-700 bg-neutral-800 px-3 py-2">{STATUSES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select>
-                <button onClick={applyBulkUpdate} className="rounded-xl bg-emerald-600 px-3 py-2">Bulk Apply</button>
+                <button onClick={exportCsv} className="rounded-xl bg-cyan-600 px-3 py-2">Export CSV</button>
+                <label className="rounded-xl border border-neutral-700 bg-neutral-800 px-3 py-2 text-center cursor-pointer hover:bg-neutral-700">Upload CSV T1<input type="file" accept=".csv" className="hidden" onChange={(e)=>handleCsvUpload(e,"T1")} /></label>
+                <label className="rounded-xl border border-neutral-700 bg-neutral-800 px-3 py-2 text-center cursor-pointer hover:bg-neutral-700">Upload CSV T2<input type="file" accept=".csv" className="hidden" onChange={(e)=>handleCsvUpload(e,"T2")} /></label>
                 <div className="flex gap-2"><button onClick={selectVisible} className="rounded-xl border border-neutral-700 bg-neutral-800 px-3 py-2">Select Visible</button><button onClick={clearSelection} className="rounded-xl border border-neutral-700 bg-neutral-800 px-3 py-2">Clear</button></div>
               </div>
             </SectionCard>
 
             <SectionCard title="Add Camera"><AddCameraInline onAdd={(cam)=>setCameras(prev=>[cam,...prev])} /></SectionCard>
 
-            <SectionCard title="Live Camera Grid">
-              <div className="overflow-auto"><table className="w-full text-sm"><thead className="bg-neutral-800 text-neutral-300"><tr><th className="px-3 py-2">Sel</th><th className="px-3 py-2 text-left">ID</th><th className="px-3 py-2 text-left">Name</th><th className="px-3 py-2 text-left">Client</th><th className="px-3 py-2 text-left">Location</th><th className="px-3 py-2 text-left">Status</th><th className="px-3 py-2 text-left">Actions</th></tr></thead><tbody>
-                {filtered.map(c=>{ const rk=getRowKey(c); const editing=editingKey===rk; return <tr key={rk} className="border-t border-neutral-800"><td className="px-3 py-2"><input type="checkbox" checked={selected.has(rk)} onChange={()=>toggleSelected(rk)} /></td><td className="px-3 py-2 text-cyan-200">{editing?<input value={editingForm.id} onChange={e=>setEditingForm(f=>({...f,id:e.target.value}))} className="rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs"/>:c.id}</td><td className="px-3 py-2">{editing?<input value={editingForm.cameraName} onChange={e=>setEditingForm(f=>({...f,cameraName:e.target.value}))} className="rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs"/>:c.cameraName}</td><td className="px-3 py-2">{editing?<select value={editingForm.client} onChange={e=>setEditingForm(f=>({...f,client:e.target.value}))} className="rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs"><option>T1</option><option>T2</option></select>:c.client}</td><td className="px-3 py-2">{editing?<input value={editingForm.location} onChange={e=>setEditingForm(f=>({...f,location:e.target.value}))} className="rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs"/>:c.location}</td><td className="px-3 py-2"><div className="flex flex-wrap gap-1"><StatusPill status={c.status}/>{STATUSES.map(st=><button key={st.key} onClick={()=>updateStatus(c,st.key)} className="px-2 py-1 text-xs rounded border border-neutral-700 bg-neutral-800">{st.label}</button>)}</div></td><td className="px-3 py-2"><div className="flex gap-1">{editing?<><button onClick={saveEdit} className="px-2 py-1 text-xs rounded border border-emerald-700">Save</button><button onClick={()=>setEditingKey(null)} className="px-2 py-1 text-xs rounded border border-neutral-700">Cancel</button></>:<><button onClick={()=>startEdit(c)} className="px-2 py-1 text-xs rounded border border-neutral-700">Edit</button><button onClick={()=>deleteCamera(rk)} className="px-2 py-1 text-xs rounded border border-rose-700">Delete</button></>}</div></td></tr>; })}
-                {filtered.length===0 && <tr><td colSpan={7} className="px-3 py-4 text-neutral-400">No cameras found</td></tr>}
-              </tbody></table></div>
+            <SectionCard title="Live Camera Grid" right={<span className="text-xs text-neutral-400">Smart priority sorting active</span>}>
+              <div className="overflow-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-neutral-800 text-neutral-300">
+                    <tr>
+                      <th className="px-3 py-2">Sel</th>
+                      <th className="px-3 py-2 text-left">ID</th>
+                      <th className="px-3 py-2 text-left">Name</th>
+                      <th className="px-3 py-2 text-left">Client</th>
+                      <th className="px-3 py-2 text-left">Location</th>
+                      <th className="px-3 py-2 text-left">Status</th>
+                      <th className="px-3 py-2 text-left">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filtered.map(c=>{
+                      const rk=getRowKey(c);
+                      const editing=editingKey===rk;
+                      const critical = c.status === "offline";
+                      return (
+                        <tr key={rk} className={`border-t border-neutral-800 ${critical ? "bg-red-950/25" : ""}`}>
+                          <td className="px-3 py-2"><input type="checkbox" checked={selected.has(rk)} onChange={()=>toggleSelected(rk)} /></td>
+                          <td className="px-3 py-2 text-cyan-200">{editing?<input value={editingForm.id} onChange={e=>setEditingForm(f=>({...f,id:e.target.value}))} className="rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs"/>:c.id}</td>
+                          <td className="px-3 py-2">{editing?<input value={editingForm.cameraName} onChange={e=>setEditingForm(f=>({...f,cameraName:e.target.value}))} className="rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs"/>:c.cameraName}</td>
+                          <td className="px-3 py-2">{editing?<select value={editingForm.client} onChange={e=>setEditingForm(f=>({...f,client:e.target.value}))} className="rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs"><option>T1</option><option>T2</option></select>:c.client}</td>
+                          <td className="px-3 py-2">{editing?<input value={editingForm.location} onChange={e=>setEditingForm(f=>({...f,location:e.target.value}))} className="rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs"/>:c.location}</td>
+                          <td className="px-3 py-2"><div className="flex flex-wrap gap-1"><StatusPill status={c.status}/>{STATUSES.map(st=><button key={st.key} onClick={()=>updateStatus(c,st.key)} className="px-2 py-1 text-xs rounded border border-neutral-700 bg-neutral-800">{st.label}</button>)}</div></td>
+                          <td className="px-3 py-2"><div className="flex gap-1">{editing?<><button onClick={saveEdit} className="px-2 py-1 text-xs rounded border border-emerald-700">Save</button><button onClick={()=>setEditingKey(null)} className="px-2 py-1 text-xs rounded border border-neutral-700">Cancel</button></>:<><button onClick={()=>startEdit(c)} className="px-2 py-1 text-xs rounded border border-neutral-700">Edit</button><button onClick={()=>deleteCamera(rk)} className="px-2 py-1 text-xs rounded border border-rose-700">Delete</button></>}</div></td>
+                        </tr>
+                      );
+                    })}
+                    {filtered.length===0 && <tr><td colSpan={7} className="px-3 py-4 text-neutral-400">No cameras found</td></tr>}
+                  </tbody>
+                </table>
+              </div>
             </SectionCard>
           </>}
 
-          {activeView==="RT Inventory" && <SectionCard title="RT Inventory" right={<button onClick={addRT} className="rounded-lg bg-cyan-600 px-2 py-1 text-xs">Add / Update RT</button>}>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-2 mb-3"><select value={rtForm.location} onChange={e=>setRtForm(f=>({...f,location:e.target.value}))} className="rounded-xl border border-neutral-700 bg-neutral-800 px-3 py-2">{RT_LOCATIONS.map(l=><option key={l}>{l}</option>)}</select><input value={rtForm.rtNumber} onChange={e=>setRtForm(f=>({...f,rtNumber:e.target.value}))} placeholder="RT Number" className="rounded-xl border border-neutral-700 bg-neutral-800 px-3 py-2"/><select value={rtForm.status} onChange={e=>setRtForm(f=>({...f,status:e.target.value}))} className="rounded-xl border border-neutral-700 bg-neutral-800 px-3 py-2">{STATUSES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select></div>
-            <div className="space-y-2 text-sm">{rtInventory.map(r=><div key={r.rtNumber} className="rounded border border-neutral-800 bg-neutral-950 px-3 py-2 flex items-center justify-between"><span>{r.rtNumber} • {r.location}</span><StatusPill status={r.status}/></div>)}</div>
+          {activeView==="RT Inventory" && <SectionCard title="RT Inventory" right={<div className="flex items-center gap-2"><button onClick={addRT} className="rounded-lg bg-cyan-600 px-2 py-1 text-xs">Add / Update RT</button><button onClick={exportRtCsv} className="rounded-lg bg-cyan-700 px-2 py-1 text-xs">Export CSV</button><label className="rounded-lg border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs cursor-pointer hover:bg-neutral-700">Upload CSV<input type="file" accept=".csv" className="hidden" onChange={handleRtCsvUpload} /></label></div>}>
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-2 mb-3">
+              <select value={rtForm.location} onChange={e=>setRtForm(f=>({...f,location:e.target.value}))} className="rounded-xl border border-neutral-700 bg-neutral-800 px-3 py-2">{RT_LOCATIONS.map(l=><option key={l}>{l}</option>)}</select>
+              <input value={rtForm.rtNumber} onChange={e=>setRtForm(f=>({...f,rtNumber:e.target.value}))} placeholder="RT Number" className="rounded-xl border border-neutral-700 bg-neutral-800 px-3 py-2"/>
+              <select value={rtForm.status} onChange={e=>setRtForm(f=>({...f,status:e.target.value}))} className="rounded-xl border border-neutral-700 bg-neutral-800 px-3 py-2">{STATUSES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select>
+              <button onClick={addRT} className="rounded-xl border border-neutral-700 bg-neutral-800 px-3 py-2">Save RT</button>
+            </div>
+            <div className="overflow-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-neutral-800 text-neutral-300"><tr><th className="px-3 py-2 text-left">RT Number</th><th className="px-3 py-2 text-left">Location</th><th className="px-3 py-2 text-left">Status</th><th className="px-3 py-2 text-left">Updated</th><th className="px-3 py-2 text-left">Actions</th></tr></thead>
+                <tbody>
+                  {rtInventory.map(r => {
+                    const editing = editingRtKey === r.rtNumber;
+                    const critical = r.status === "offline";
+                    return <tr key={r.rtNumber} className={`border-t border-neutral-800 ${critical ? "bg-red-950/25" : ""}`}>
+                      <td className="px-3 py-2">{editing ? <input value={editingRtForm.rtNumber} onChange={e=>setEditingRtForm(f=>({...f,rtNumber:e.target.value}))} className="rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs"/> : r.rtNumber}</td>
+                      <td className="px-3 py-2">{editing ? <select value={editingRtForm.location} onChange={e=>setEditingRtForm(f=>({...f,location:e.target.value}))} className="rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs">{RT_LOCATIONS.map(l=><option key={l}>{l}</option>)}</select> : r.location}</td>
+                      <td className="px-3 py-2">{editing ? <select value={editingRtForm.status} onChange={e=>setEditingRtForm(f=>({...f,status:e.target.value}))} className="rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs">{STATUSES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select> : <StatusPill status={r.status}/>}</td>
+                      <td className="px-3 py-2 text-neutral-400">{r.updatedAt ? new Date(r.updatedAt).toLocaleString() : "-"}</td>
+                      <td className="px-3 py-2"><div className="flex gap-2">{editing ? <><button onClick={()=>saveEditRT(r.rtNumber)} className="px-2 py-1 text-xs rounded border border-emerald-700">Save</button><button onClick={()=>setEditingRtKey(null)} className="px-2 py-1 text-xs rounded border border-neutral-700">Cancel</button></> : <><button onClick={()=>startEditRT(r)} className="px-2 py-1 text-xs rounded border border-neutral-700">Edit</button><button onClick={()=>deleteRT(r.rtNumber)} className="px-2 py-1 text-xs rounded border border-rose-700">Delete</button></>}</div></td>
+                    </tr>;
+                  })}
+                  {rtInventory.length===0 && <tr><td colSpan={5} className="px-3 py-4 text-neutral-400">No RT records</td></tr>}
+                </tbody>
+              </table>
+            </div>
           </SectionCard>}
 
           <SectionCard title="LIVE Incident Panel" right={<button onClick={replayLastAction} className="rounded-lg border border-cyan-700 bg-cyan-900/30 px-2 py-1 text-xs text-cyan-200">Replay Last Action</button>}>
