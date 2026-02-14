@@ -14,10 +14,11 @@ import {
 } from "firebase/firestore";
 
 /*
-  SOC PRO MAX — STABLE BUILD (JSX FIXED)
-  - Fixed missing </main> / stray JSX after RT Inventory
-  - RT Inventory shows RT information only
-  - Camera dashboard retained with enterprise selection
+  SOC PRO MAX — CLEAN BUILD
+  Fixes applied:
+  - Removed broken duplicated state block that caused syntax error near line ~188
+  - Restored valid RT inventory state + inline edit flow
+  - Kept RT inventory separate from camera dashboard
 */
 
 const STATUSES = [
@@ -144,6 +145,31 @@ export default function CCTVDashboardSocProMax() {
     { rtNumber: "RT-002", location: "T2", status: "working", updatedAt: new Date().toISOString() },
   ]);
   const [rtForm, setRtForm] = useState({ location: "T1", rtNumber: "", status: "working" });
+  const [editingRtKey, setEditingRtKey] = useState(null);
+  const [editingRtForm, setEditingRtForm] = useState({ rtNumber: "", location: "T1", status: "working" });
+
+  const RT_LOCATIONS = ["T1", "T2", "Landside", "Control Room"];
+  const RT_STATUS = ["working", "offline", "maintenance", "removed"];
+
+  const startEditRt = (r) => {
+    setEditingRtKey(r.rtNumber);
+    setEditingRtForm({ rtNumber: r.rtNumber, location: r.location, status: r.status });
+  };
+  const cancelEditRt = () => {
+    setEditingRtKey(null);
+    setEditingRtForm({ rtNumber: "", location: "T1", status: "working" });
+  };
+  const saveEditRt = () => {
+    const newRt = String(editingRtForm.rtNumber || "").trim();
+    if (!newRt) return;
+    setRtInventory(prev => prev.map(x => x.rtNumber === editingRtKey ? { ...x, rtNumber: newRt, location: editingRtForm.location, status: editingRtForm.status, updatedAt: new Date().toISOString() } : x));
+    cancelEditRt();
+  };
+  const deleteRt = (rtNumber) => setRtInventory(prev => prev.filter(x => x.rtNumber !== rtNumber));
+
+  useEffect(() => {
+    if (editingRtKey && !rtInventory.some(r => r.rtNumber === editingRtKey)) cancelEditRt();
+  }, [rtInventory, editingRtKey]);
 
   useEffect(() => {
     if (!db) return;
@@ -179,13 +205,11 @@ export default function CCTVDashboardSocProMax() {
     n.has(rowKey) ? n.delete(rowKey) : n.add(rowKey);
     return n;
   });
-
   const selectVisible = () => setSelected(prev => {
     const n = new Set(prev);
     filtered.forEach((c) => n.add(getRowKey(c)));
     return n;
   });
-
   const clearSelection = () => setSelected(new Set());
   const selectByStatus = (k) => setSelected(prev => {
     const n = new Set(prev);
@@ -268,9 +292,6 @@ export default function CCTVDashboardSocProMax() {
     e.target.value = "";
   };
 
-  const RT_LOCATIONS = ["T1", "T2", "Landside", "Control Room"];
-  const RT_STATUS = ["working", "offline", "maintenance", "removed"];
-
   const addRTInventoryItem = () => {
     const rtNumber = String(rtForm.rtNumber || "").trim();
     if (!rtNumber) return;
@@ -284,6 +305,19 @@ export default function CCTVDashboardSocProMax() {
       return [{ rtNumber, location: rtForm.location, status: rtForm.status, updatedAt: new Date().toISOString() }, ...prev];
     });
     setRtForm(f => ({ ...f, rtNumber: "" }));
+  };
+
+  const exportRtCsv = () => {
+    const header = ["RTNumber", "Location", "Status", "UpdatedAt"];
+    const rows = rtInventory.map((r) => [r.rtNumber, r.location, r.status, r.updatedAt]);
+    const csv = [header, ...rows].map(row => row.map(v => `"${String(v ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `rt_inventory_${new Date().toISOString().slice(0,10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   if (!isAuthed) {
@@ -407,40 +441,31 @@ export default function CCTVDashboardSocProMax() {
           )}
 
           {activeView === "RT Inventory" && (
-            <SectionCard title="RT Inventory" right={<span className="text-xs text-neutral-400">RT information only</span>}>
+            <SectionCard title="RT Inventory" right={<div className="flex items-center gap-2"><span className="text-xs text-neutral-400">RT information only</span><button onClick={exportRtCsv} className="rounded-lg bg-cyan-600 px-2 py-1 text-xs hover:bg-cyan-500">Export CSV</button></div>}>
               <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-                <select value={rtForm.location} onChange={(e)=>setRtForm(f=>({...f, location:e.target.value}))} className="rounded-xl border border-neutral-700 bg-neutral-800 px-3 py-2">
-                  {RT_LOCATIONS.map((l)=><option key={l} value={l}>{l}</option>)}
-                </select>
+                <select value={rtForm.location} onChange={(e)=>setRtForm(f=>({...f, location:e.target.value}))} className="rounded-xl border border-neutral-700 bg-neutral-800 px-3 py-2">{RT_LOCATIONS.map(l=><option key={l} value={l}>{l}</option>)}</select>
                 <input value={rtForm.rtNumber} onChange={(e)=>setRtForm(f=>({...f, rtNumber:e.target.value}))} placeholder="RT Number (e.g. RT-010)" className="rounded-xl border border-neutral-700 bg-neutral-800 px-3 py-2" />
-                <select value={rtForm.status} onChange={(e)=>setRtForm(f=>({...f, status:e.target.value}))} className="rounded-xl border border-neutral-700 bg-neutral-800 px-3 py-2">
-                  {RT_STATUS.map((s)=><option key={s} value={s}>{s}</option>)}
-                </select>
+                <select value={rtForm.status} onChange={(e)=>setRtForm(f=>({...f, status:e.target.value}))} className="rounded-xl border border-neutral-700 bg-neutral-800 px-3 py-2">{RT_STATUS.map(s=><option key={s} value={s}>{s}</option>)}</select>
                 <button onClick={addRTInventoryItem} className="rounded-xl bg-cyan-600 px-3 py-2">Add / Update RT</button>
               </div>
               <div className="mt-4 overflow-auto">
                 <table className="w-full text-sm">
-                  <thead className="bg-neutral-800 text-neutral-300">
-                    <tr>
-                      <th className="px-3 py-2 text-left">RT Number</th>
-                      <th className="px-3 py-2 text-left">Location</th>
-                      <th className="px-3 py-2 text-left">Working Status</th>
-                      <th className="px-3 py-2 text-left">Updated</th>
-                    </tr>
-                  </thead>
+                  <thead className="bg-neutral-800 text-neutral-300"><tr><th className="px-3 py-2 text-left">RT Number</th><th className="px-3 py-2 text-left">Location</th><th className="px-3 py-2 text-left">Working Status</th><th className="px-3 py-2 text-left">Updated</th><th className="px-3 py-2 text-left">Actions</th></tr></thead>
                   <tbody>
-                    {rtInventory.map((r) => {
-                      const st = STATUSES.find((x) => x.key === r.status) || STATUSES[0];
+                    {rtInventory.map((r)=>{
+                      const st = STATUSES.find(x=>x.key===r.status) || STATUSES[0];
+                      const isEditing = editingRtKey === r.rtNumber;
                       return (
-                        <tr key={r.rtNumber} className={`border-t border-neutral-800 ${st.row || ""}`}>
-                          <td className="px-3 py-2 text-cyan-200 font-semibold">{r.rtNumber}</td>
-                          <td className="px-3 py-2">{r.location}</td>
-                          <td className="px-3 py-2"><StatusPill status={r.status} /></td>
+                        <tr key={r.rtNumber} className={`border-t border-neutral-800 ${st.row||""}`}>
+                          <td className="px-3 py-2 text-cyan-200 font-semibold">{isEditing ? <input value={editingRtForm.rtNumber} onChange={(e)=>setEditingRtForm(f=>({...f, rtNumber:e.target.value}))} className="w-full rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs" /> : r.rtNumber}</td>
+                          <td className="px-3 py-2">{isEditing ? <select value={editingRtForm.location} onChange={(e)=>setEditingRtForm(f=>({...f, location:e.target.value}))} className="rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs">{RT_LOCATIONS.map(l=><option key={l} value={l}>{l}</option>)}</select> : r.location}</td>
+                          <td className="px-3 py-2">{isEditing ? <select value={editingRtForm.status} onChange={(e)=>setEditingRtForm(f=>({...f, status:e.target.value}))} className="rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs">{RT_STATUS.map(s=><option key={s} value={s}>{s}</option>)}</select> : <StatusPill status={r.status} />}</td>
                           <td className="px-3 py-2 text-neutral-400">{new Date(r.updatedAt).toLocaleString()}</td>
+                          <td className="px-3 py-2"><div className="flex gap-2">{isEditing ? <><button onClick={saveEditRt} className="px-2 py-1 text-xs rounded border border-emerald-700 bg-emerald-900/30 text-emerald-200">Save</button><button onClick={cancelEditRt} className="px-2 py-1 text-xs rounded border border-neutral-700 bg-neutral-800">Cancel</button></> : <><button onClick={()=>startEditRt(r)} className="px-2 py-1 text-xs rounded border border-neutral-700 bg-neutral-800">Edit</button><button onClick={()=>deleteRt(r.rtNumber)} className="px-2 py-1 text-xs rounded border border-rose-700 bg-rose-900/30 text-rose-200">Delete</button></>}</div></td>
                         </tr>
                       );
                     })}
-                    {rtInventory.length===0 && <tr><td colSpan={4} className="px-3 py-4 text-neutral-400">No RT records yet.</td></tr>}
+                    {rtInventory.length===0 && <tr><td colSpan={5} className="px-3 py-4 text-neutral-400">No RT records yet.</td></tr>}
                   </tbody>
                 </table>
               </div>
